@@ -19,12 +19,20 @@ What one run does:
    View Result.
 6. Logs one line per file, e.g. `Inventory updated: Amazon AU at 18/11/2026 14:05, COMPLETED, request 6af…`.
 
-## One-time setup
+## Setup on a new laptop (one command)
+
+Needs Git, Python 3.11+ (on PATH), Google Chrome and SoftEther VPN Client with the AU-PIY connection. In PowerShell:
 
 ```
-pip install -U -r requirements.txt
-python -m playwright install chromium        (only if Playwright asks for it; the bot uses your installed Chrome)
-copy config.example.json config.json
+git clone https://github.com/NavrozSalim/Inventory-bot.git "$HOME\Inventory-bot"; cd "$HOME\Inventory-bot"; .\setup.bat
+```
+
+`setup.bat` installs the Python packages, creates `config.json` and `input\`, and checks Chrome, SoftEther and the
+VPN connection. It prints `[!!]` for anything missing. Update later with `git pull` then `.\setup.bat`.
+
+Then sign in once (VPN on):
+
+```
 python open_profile.py
 ```
 
