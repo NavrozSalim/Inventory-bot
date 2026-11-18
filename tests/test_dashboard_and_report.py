@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from core.dashboard import DashRow, match_results, new_rows, parse_row, row_state
+from core.dashboard import DashRow, id_time, match_results, new_rows, parse_row, row_state
 from core.files import INVENTORY, PRICE, UploadItem
 from core.portal import classify_feedback, login_state
 from core.report import (COMPLETED, DASH_FAILED, DRY_RUN, ERRORS, FAILED, NOT_FOUND, PENDING, REJECTED, SUBMITTED,
@@ -39,6 +39,27 @@ def test_new_rows_stop_at_first_known_id():
             row("old", "Import Price Request", "COMPLETED"), row("older", "Import Price Request", "COMPLETED")]
     assert [r.request_id for r in new_rows(rows, {"old", "older"})] == ["n2", "n1"]
     assert len(new_rows(rows, set())) == 4
+
+
+def test_parse_row_by_content():
+    # the real portal: 24-hex ID, and a leading cell (e.g. a checkbox or row header) must not shift columns
+    r = parse_row(["", "6afe1b832c268fadaeead4b7", "Import Price Request", "18/11/2026 13:41", "COMPLETED",
+                   "View Result"])
+    assert (r.request_id, r.kind, r.requested_at, r.state) == ("6afe1b832c268fadaeead4b7", PRICE,
+                                                               "18/11/2026 13:41", COMPLETED)
+    assert parse_row(["ID", "Description", "Requested Date / Time", "Status", "Action"]) is None
+
+
+def test_new_rows_by_id_time_when_snapshot_missed_them():
+    # 6afe1b83 = 18/11/2026 21:41:23 UTC, 6afbb4cb = 17/11/2026 01:58:35 UTC
+    rows = [row("6afe1b832c268fadaeead4b7", "Import Price Request", "COMPLETED"),
+            row("6afe1b6d556a94901b7a1b23", "Import Stock/Status Request", "COMPLETED"),
+            row("6afbb4cb2f370f84e3061a8d", "Import Price Request", "COMPLETED")]
+    since = datetime(2026, 11, 18, 21, 40, 54, tzinfo=timezone.utc).timestamp()
+    assert [r.request_id[:8] for r in new_rows(rows, set(), since)] == ["6afe1b83", "6afe1b6d"]
+    assert [r.request_id[:8] for r in new_rows(rows, {"6afbb4cb2f370f84e3061a8d"}, since)] == ["6afe1b83",
+                                                                                               "6afe1b6d"]
+    assert id_time("6af1") is None
 
 
 def test_match_by_type_oldest_row_to_first_upload():

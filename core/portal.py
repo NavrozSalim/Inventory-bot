@@ -25,6 +25,8 @@ BAD_WORDS = re.compile(r"error|fail|invalid|too large|unable|rejected|not allowe
 CODE_WORDS = re.compile(r"verification code|enter (the |your )?code|one[- ]time|security code|we sent|sent a code",
                         re.I)
 LOGIN_URL_PARTS = ("login", "signin", "sign-in", "/auth", "authorize", "/u/", "identifier")
+ROW_SELECTOR = "table tbody tr, [role=rowgroup] [role=row], [role=grid] [role=row]"
+CELL_SELECTOR = "td, th, [role=cell], [role=gridcell]"
 
 
 class PortalError(Exception):
@@ -292,22 +294,33 @@ class Portal:
             self.screenshot("dashboard-not-found")
             raise PortalError("The Import Request Dashboard did not load. Check portal.import_dashboard_url "
                               "in config.json.") from None
+        self._refresh_dashboard()
         try:
-            page.locator("table tbody tr").first.wait_for(timeout=10000)
+            page.locator(ROW_SELECTOR).first.wait_for(timeout=10000)
         except Exception:
             pass   # an empty dashboard is fine
         if not self.dashboard_url:
             self.dashboard_url = page.url
             self.log(f"Import Request Dashboard: {self.dashboard_url}")
 
+    def _refresh_dashboard(self):
+        """The dashboard says new requests show only after its Refresh button is clicked."""
+        try:
+            btn = self.page.get_by_role("button", name=re.compile(r"^\s*refresh\s*$", re.I))
+            if btn.count() and btn.first.is_visible():
+                btn.first.click(timeout=5000)
+                self.page.wait_for_timeout(2500)
+        except Exception:
+            pass
+
     def _rows_on_page(self):
         rows = []
-        for tr in self.page.locator("table tbody tr").all():
+        for tr in self.page.locator(ROW_SELECTOR).all():
             try:
-                row = parse_row(tr.locator("td").all_inner_texts(), tr.inner_text())
+                row = parse_row(tr.locator(CELL_SELECTOR).all_inner_texts(), tr.inner_text())
             except Exception:
                 row = None
-            if row:
+            if row and all(r.request_id != row.request_id for r in rows):
                 rows.append(row)
         return rows
 
@@ -352,9 +365,16 @@ class Portal:
                    "Waiting before checking the Import Request Dashboard")
         deadline = self.clock() + float(self.cfg.get("dashboard_extra_wait_minutes", 15)) * 60
         refresh = float(self.cfg.get("dashboard_refresh_seconds", 30))
+        times = [r.uploaded_at.timestamp() for r in submitted if r.uploaded_at]
+        since = min(times) if times else None
         while True:
             self.open_dashboard()
-            rows = new_rows(self.read_rows(known_ids), known_ids)
+            all_rows = self.read_rows(known_ids)
+            rows = new_rows(all_rows, known_ids, since)
+            top = all_rows[0] if all_rows else None
+            self.log(f"Dashboard: {len(all_rows)} row(s) read, {len(rows)} new"
+                     + (f"; newest {top.request_id} {top.description} {top.requested_at} {top.status}"
+                        if top else ""))
             still_open = match_results(results, rows)
             self.on_change()
             done = len(submitted) - still_open
