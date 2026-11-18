@@ -1,0 +1,6 @@
+{
+  "server": "<web app address, e.g. https://app.example.com>",
+  "token": "<ingest token with scope inventory-bot>",
+  "poll_seconds": 15,
+  "progress_seconds": 20
+}

@@ -1,5 +1,6 @@
 """Run log (console + logs/inventory-bot-<date>.log) and the per-run CSV summary."""
 import csv
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +94,28 @@ def summary(results):
 
 def all_ok(results):
     return bool(results) and all(r.status == DRY_RUN or r.dash_state == COMPLETED for r in results)
+
+
+def result_dict(r):
+    """One result for the web app (the agent sends these)."""
+    it = r.item
+    return {
+        "vendor": it.vendor, "kind": it.kind, "part": it.part, "parts": it.parts, "rows": it.rows,
+        "uploaded_at": f"{r.uploaded_at:%d/%m/%Y %H:%M:%S}" if r.uploaded_at else "",
+        "status": r.status, "message": r.message, "request_id": r.request_id, "requested_at": r.requested_at,
+        "dash_state": r.dash_state, "error_count": r.error_count,
+    }
+
+
+def write_results_json(path, results, message=""):
+    """Results file the agent reads while the bot runs (written atomically)."""
+    if not path:
+        return
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps({"message": message, "results": [result_dict(r) for r in results]}),
+                   encoding="utf-8")
+    tmp.replace(path)
 
 
 CSV_COLUMNS = ["vendor", "file_type", "part", "file", "rows", "uploaded_at", "upload_status", "portal_message",

@@ -59,16 +59,60 @@ def main():
     except VpnError as e:
         line(False, f"{e} Install SoftEther VPN Client.")
 
+    agent_ok = check_agent(line)
+
     print()
     if ok:
         print("Ready. Next:")
     else:
         print("Fix the [!!] lines above, then run setup.bat again. After that:")
     print("  1. Turn on the VPN, then sign in once:   python open_profile.py")
-    print("  2. Put the 'Templates by Vendor' ZIP in the input folder")
-    print("  3. Watch a dry run:                     python run_inventory.py --dry-run")
-    print("  4. Real run:                            run_inventory.bat")
+    if agent_ok:
+        print("  2. Start the agent and leave it open:   run_agent.bat")
+        print("  3. In the web app (MyDeal store > Catalog) click 'Upload the file on the Marketplace'.")
+        print("     Tick 'Dry run' the first time and watch the Chrome window.")
+    else:
+        print("  2. Put the 'Templates by Vendor' ZIP in the input folder")
+        print("  3. Watch a dry run:                     python run_inventory.py --dry-run")
     return 0 if ok else 1
+
+
+def check_agent(line):
+    """agent.json: web app address and token. Checked with a lookup that never takes a job."""
+    path = ROOT / "agent.json"
+    if not path.exists():
+        shutil.copy(ROOT / "agent.example.json", path)
+        print("  [OK] agent.json created from agent.example.json")
+    from agent import API, AgentConfigError, load_agent_config
+    try:
+        cfg = load_agent_config(path)
+    except AgentConfigError as e:
+        line(False, f"Web app jobs: {e} (only needed for the 'Upload the file on the Marketplace' button)")
+        return False
+    import requests
+    probe = f"{cfg['server']}{API}/jobs/00000000-0000-0000-0000-000000000000/"
+    try:
+        r = requests.get(probe, headers={"Authorization": f"Bearer {cfg['token']}"}, timeout=20)
+    except Exception as e:
+        line(False, f"Web app {cfg['server']} not reachable ({type(e).__name__}).")
+        return False
+    if r.status_code == 404:
+        try:
+            known = r.json().get("error") == "Job not found."   # signed in, no such job: token is fine
+        except ValueError:
+            known = False
+        if known:
+            line(True, f"Web app {cfg['server']} accepts the token")
+            return True
+        line(False, f"Web app {cfg['server']} has no inventory-bot endpoints yet (deploy the latest stg), "
+                    "or the address is wrong.")
+        return False
+    if r.status_code in (401, 403):
+        line(False, f"Web app refused the token ({r.status_code}). Check token in agent.json "
+                    "(it needs scope inventory-bot).")
+    else:
+        line(False, f"Web app answered {r.status_code}; is the server address in agent.json right?")
+    return False
 
 
 if __name__ == "__main__":

@@ -4,18 +4,23 @@
   python run_inventory.py --zip "path.zip"      a "Templates by Vendor" ZIP from the web app
   python run_inventory.py --dry-run             everything except clicking Import
   python run_inventory.py --only "Amazon AU" --only Vevor
+  python run_inventory.py --kinds inventory     only the Stock/Status files
+
+The laptop agent (agent.py) runs this with --zip and --results-json for jobs started from the web app.
 """
 import argparse
 import shutil
 import sys
 from datetime import datetime
 
+from core.attention import clear as clear_attention
 from core.browser import BrowserSession, BrowserStartError
 from core.config import ROOT, ConfigError, load_config
-from core.files import FilesError, collect_files, newest_zip
+from core.files import INVENTORY, PRICE, FilesError, collect_files, newest_zip
 from core.ipcheck import IpCheckError, check_browser_ip
 from core.portal import Portal, PortalError
-from core.report import (DRY_RUN, SUBMITTED, RunLog, all_ok, result_line, summary, write_csv)
+from core.report import (DRY_RUN, SUBMITTED, RunLog, all_ok, result_line, summary, write_csv,
+                         write_results_json)
 from core.vpn import VpnError, connect
 
 STOP_ERRORS = (ConfigError, FilesError, VpnError, IpCheckError, PortalError, BrowserStartError)
@@ -30,9 +35,18 @@ def parse_args(argv):
     p.add_argument("--dry-run", action="store_true", help="choose each file but do not click Import")
     p.add_argument("--include-unmapped", action="store_true", help="also upload the Unmapped SKUs files")
     p.add_argument("--only", action="append", default=[], help="vendor name to upload (repeat for more)")
+    p.add_argument("--kinds", action="append", default=[],
+                   help="inventory and/or price (default both; repeat or comma-separate)")
     p.add_argument("--skip-vpn", action="store_true",
                    help="do not connect SoftEther (the IP check still runs and must pass)")
-    return p.parse_args(argv)
+    p.add_argument("--results-json", help="keep this JSON file updated with each file's result (used by agent.py)")
+    args = p.parse_args(argv)
+    kinds = [k.strip().lower() for raw in args.kinds for k in raw.split(",") if k.strip()]
+    bad = [k for k in kinds if k not in (INVENTORY, PRICE)]
+    if bad:
+        p.error(f"--kinds must be inventory or price, not {', '.join(bad)}")
+    args.kinds = kinds
+    return args
 
 
 def main(argv=None):
@@ -41,6 +55,13 @@ def main(argv=None):
     log = RunLog(ROOT / "logs", stamp)
     work_dir = ROOT / "work" / stamp
     results = []
+
+    def save(message=""):
+        try:
+            write_results_json(args.results_json, results, message)
+        except OSError as e:
+            log(f"Warning: could not write {args.results_json}: {e}")
+
     log(f"=== MyDeal inventory bot run {stamp}{' (DRY RUN)' if args.dry_run else ''} ===")
     try:
         cfg = load_config(args.config)
@@ -49,11 +70,13 @@ def main(argv=None):
         only = [v.strip() for o in args.only for v in o.split(",")]
         items, skipped = collect_files(
             source, work_dir, include_unmapped=args.include_unmapped, only=only,
-            max_rows=int(cfg.get("max_rows_per_file") or 0), upload_order=cfg.get("upload_order", "vendor"))
+            max_rows=int(cfg.get("max_rows_per_file") or 0), upload_order=cfg.get("upload_order", "vendor"),
+            kinds=args.kinds or None)
         for name, reason in skipped:
             log(f"Skipped {name}: {reason}")
         if not items:
             log("Nothing to upload.")
+            save("Nothing to upload.")
             return 2
         store = next((it.store for it in items if it.store), "")
         log(f"{len(items)} file(s) to upload{f' for {store}' if store else ''}:")
@@ -68,7 +91,7 @@ def main(argv=None):
         with BrowserSession(cfg) as session:
             page = session.new_page()
             check_browser_ip(page, cfg, log)
-            portal = Portal(page, cfg, log, ROOT / "logs" / "screenshots" / stamp)
+            portal = Portal(page, cfg, log, ROOT / "logs" / "screenshots" / stamp, on_change=save)
             portal.sign_in()
             known_ids = set()
             if not args.dry_run:
@@ -81,8 +104,9 @@ def main(argv=None):
                 log(f"[{n}/{len(items)}] Uploading {item.label} ({item.rows} rows)...")
                 r = portal.upload(item, dry_run=args.dry_run)
                 results.append(r)
+                save()
                 if r.status == DRY_RUN:
-                    log(f"  Dry run: file chosen, Import not clicked.")
+                    log("  Dry run: file chosen, Import not clicked.")
                 elif r.status == SUBMITTED:
                     log(f"  Imported at {r.uploaded_at:%d/%m/%Y %H:%M:%S}. Portal said: {r.message}")
                 else:
@@ -98,8 +122,10 @@ def main(argv=None):
         log("--- Results ---")
         for r in results:
             log(result_line(r))
-        log(summary(results))
+        done = summary(results)
+        log(done)
         log(f"Summary file: {write_csv(ROOT / 'logs' / f'inventory-run-{stamp}.csv', results)}")
+        save(done)
         return 0 if all_ok(results) else 1
     except STOP_ERRORS as e:
         log(f"STOPPED: {e}")
@@ -107,11 +133,14 @@ def main(argv=None):
             for r in results:
                 log(result_line(r))
             write_csv(ROOT / "logs" / f"inventory-run-{stamp}.csv", results)
+        save(f"STOPPED: {e}")
         return 2
     except KeyboardInterrupt:
         log("Stopped by the user (Ctrl+C).")
+        save("Stopped on the laptop (Ctrl+C).")
         return 130
     finally:
+        clear_attention()
         shutil.rmtree(work_dir, ignore_errors=True)
 
 

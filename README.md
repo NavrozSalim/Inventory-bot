@@ -54,7 +54,22 @@ Settings in `config.json` (all optional except what you want to change):
 | `dashboard_extra_wait_minutes` | How long to keep re-checking rows that are not finished (15). |
 | `max_rows_per_file` | Split a bigger vendor file into parts of this many rows (0 = never). |
 
-## Each run
+## Running from the web app (recommended)
+
+The MyDeal store's Catalog page has **Upload the file on the Marketplace**. Pick the vendors, Inventory and/or
+Price, optionally Dry run, and click Start. This laptop picks the job up, downloads exactly those files (built
+with the latest prices and stock), runs the bot, and the web page shows the status, "Action needed on the laptop"
+(e.g. type the verification code), each file's result and the log. Cancel stops the bot here.
+
+One-time:
+
+1. On the main server, create a token for the store owner (prints the token once):
+   `python manage.py create_ingest_token --label inventory-laptop --scopes inventory-bot --owner-email <owner email>`
+2. On this laptop, put the web app address and that token in `agent.json` (setup.bat creates it), then run
+   `.\setup.bat` again: it checks the web app accepts the token.
+3. Double-click `run_agent.bat` and leave the window open.
+
+## Running by hand
 
 1. In the web app, Catalog > MyDeal store > **Download templates > All vendors, separate files (ZIP)**.
 2. Put the ZIP in `input\` (the bot takes the newest ZIP there), or pass it with `--zip`.

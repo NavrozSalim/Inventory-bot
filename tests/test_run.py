@@ -33,7 +33,7 @@ class FakeSession:
 class FakePortal:
     instances = []
 
-    def __init__(self, page, cfg, log, shots_dir):
+    def __init__(self, page, cfg, log, shots_dir, on_change=None):
         self.uploads = []
         self.verified = False
         FakePortal.instances.append(self)
@@ -85,6 +85,35 @@ def test_full_run_uploads_each_vendor_file_then_verifies(setup):
     assert "Inventory updated: Vevor" in log and "Price updated: Vevor" in log
     assert list((tmp / "logs").glob("inventory-run-*.csv"))
     assert not list((tmp / "work").glob("*/*"))   # extracted files removed
+
+
+def test_kinds_and_results_json(setup):
+    tmp, cfg, z, _ = setup
+    out = tmp / "results.json"
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--kinds", "price",
+                               "--results-json", str(out)]) == 0
+    assert FakePortal.instances[0].uploads == [("Vevor", "price", False)]
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["message"].startswith("Finished: 1 vendor(s), 1 file(s): 1 completed")
+    assert data["results"][0]["vendor"] == "Vevor" and data["results"][0]["dash_state"] == "completed"
+
+
+def test_bad_kinds_value(setup):
+    _, cfg, _, _ = setup
+    with pytest.raises(SystemExit):
+        run_inventory.main(["--config", str(cfg), "--kinds", "stock"])
+
+
+def test_stop_message_in_results_json(setup, monkeypatch):
+    tmp, cfg, _, _ = setup
+    out = tmp / "results.json"
+
+    def wrong(page, cfg, log):
+        raise IpCheckError("Wrong IP")
+
+    monkeypatch.setattr(run_inventory, "check_browser_ip", wrong)
+    assert run_inventory.main(["--config", str(cfg), "--results-json", str(out)]) == 2
+    assert json.loads(out.read_text(encoding="utf-8"))["message"] == "STOPPED: Wrong IP"
 
 
 def test_dry_run_does_not_verify(setup):

@@ -122,8 +122,9 @@ def order_items(items, upload_order="vendor"):
     return sorted(items, key=lambda it: (*vendor_key(it), kind_rank[it.kind], it.part))
 
 
-def collect_files(source, work_dir, *, include_unmapped=False, only=None, max_rows=0, upload_order="vendor"):
-    """Return (items to upload, [(file name, reason skipped)])."""
+def collect_files(source, work_dir, *, include_unmapped=False, only=None, max_rows=0, upload_order="vendor",
+                  kinds=None):
+    """Return (items to upload, [(file name, reason skipped)]). ``kinds``: inventory/price to keep (None = both)."""
     source = Path(source)
     work_dir = Path(work_dir)
     if not source.exists():
@@ -153,6 +154,9 @@ def collect_files(source, work_dir, *, include_unmapped=False, only=None, max_ro
             continue
         if vendor.lower() == UNMAPPED and not include_unmapped:
             skipped.append((path.name, "Unmapped SKUs are skipped (use --include-unmapped to upload them)"))
+            continue
+        if kinds and kind not in kinds:
+            skipped.append((path.name, f"{kind} files not chosen for this run"))
             continue
         if wanted and vendor.lower() not in wanted:
             skipped.append((path.name, "vendor not in --only"))

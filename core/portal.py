@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .attention import alert
+from .attention import clear as clear_attention
 from .config import PORTAL_HOST, is_set
 from .dashboard import match_results, new_rows, parse_row
 from .files import INVENTORY
@@ -56,7 +57,8 @@ def login_state(url, body, *, org_name, has_password, has_code_input):
 
 
 class Portal:
-    def __init__(self, page, cfg, log, shots_dir, *, clock=time.monotonic):
+    def __init__(self, page, cfg, log, shots_dir, *, clock=time.monotonic, on_change=None):
+        self.on_change = on_change or (lambda: None)   # called when dashboard results change
         self.page = page
         self.cfg = cfg
         self.pcfg = cfg["portal"]
@@ -127,6 +129,8 @@ class Portal:
         while True:
             state = self.state()
             if state == "ready":
+                if alerted:
+                    clear_attention()
                 self.log("Signed in to Woolworths MarketPlus.")
                 return
             if state == "org":
@@ -352,6 +356,7 @@ class Portal:
             self.open_dashboard()
             rows = new_rows(self.read_rows(known_ids), known_ids)
             still_open = match_results(results, rows)
+            self.on_change()
             done = len(submitted) - still_open
             if not still_open:
                 self.log(f"All {len(submitted)} import request(s) finished on the dashboard.")

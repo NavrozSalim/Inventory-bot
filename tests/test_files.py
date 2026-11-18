@@ -40,6 +40,12 @@ def test_kind_order(zip_path, tmp_path):
     assert labels(items) == [("Amazon AU", INVENTORY), ("Vevor", INVENTORY), ("Amazon AU", PRICE), ("Vevor", PRICE)]
 
 
+def test_kinds_filter(zip_path, tmp_path):
+    items, skipped = collect_files(zip_path, tmp_path / "work", kinds=["price"])
+    assert labels(items) == [("Amazon AU", PRICE), ("Vevor", PRICE)]
+    assert sum("inventory files not chosen" in reason for _, reason in skipped) == 2
+
+
 def test_include_unmapped_goes_last(zip_path, tmp_path):
     items, _ = collect_files(zip_path, tmp_path / "work", include_unmapped=True)
     assert labels(items)[-2:] == [("Unmapped", INVENTORY), ("Unmapped", PRICE)]
