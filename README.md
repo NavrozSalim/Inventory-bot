@@ -17,6 +17,8 @@ What one run does:
 5. Waits 3 minutes, opens the Import Request Dashboard and matches each upload to its row. Rows not yet
    COMPLETED are re-checked every 30 s for up to 15 more minutes. Rows with errors get a screenshot of
    View Result.
+   Each file gets up to 3 tries: a file the portal refuses, or that FAILED or never showed up on the
+   dashboard, is uploaded again (then the dashboard is checked again).
 6. Logs one line per file, e.g. `Inventory updated: Amazon AU at 18/11/2026 14:05, COMPLETED, request 6af…`.
 
 ## Setup on a new laptop (one command)
@@ -53,6 +55,8 @@ Settings in `config.json` (all optional except what you want to change):
 | `wait_after_upload_minutes` | Wait before the first dashboard check (3). |
 | `dashboard_extra_wait_minutes` | How long to keep re-checking rows that are not finished (15). |
 | `max_rows_per_file` | Split a bigger vendor file into parts of this many rows (0 = never). |
+| `upload_attempts` | Tries per file (3). A file is uploaded again when the portal refuses it or the page fails, and when the Import Request Dashboard shows it FAILED or it never shows up there. |
+| `seconds_between_attempts` | Wait before uploading a file again (15). |
 
 ## Running from the web app (recommended)
 

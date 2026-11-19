@@ -35,6 +35,8 @@ DEFAULTS = {
     },
     "upload_order": "vendor",            # "vendor": each vendor's Inventory then Price; "kind": all Inventory, then all Price
     "seconds_between_uploads": 5,
+    "upload_attempts": 3,                # tries per file: again when the portal refuses it or the dashboard shows it failed
+    "seconds_between_attempts": 15,
     "upload_feedback_seconds": 30,
     "wait_after_upload_minutes": 3,
     "dashboard_extra_wait_minutes": 15,

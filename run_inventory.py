@@ -19,11 +19,21 @@ from core.config import ROOT, ConfigError, load_config
 from core.files import INVENTORY, PRICE, FilesError, collect_files, newest_zip
 from core.ipcheck import IpCheckError, check_browser_ip
 from core.portal import Portal, PortalError
-from core.report import (DRY_RUN, SUBMITTED, RunLog, all_ok, result_line, summary, write_csv,
-                         write_results_json)
+from core.report import (DASH_FAILED, DRY_RUN, NOT_FOUND, SUBMITTED, RunLog, all_ok, result_line, summary,
+                         write_csv, write_results_json)
 from core.vpn import VpnError, connect
 
 STOP_ERRORS = (ConfigError, FilesError, VpnError, IpCheckError, PortalError, BrowserStartError)
+
+
+def needs_another_try(r, uploads, max_tries):
+    """Upload again after the dashboard check: the import FAILED there, or it never showed up (only when the
+    dashboard did show other uploads of this run, so a dashboard that cannot be read does not re-upload all)."""
+    if r.status != SUBMITTED or r.attempt >= max_tries:
+        return False
+    if r.dash_state == DASH_FAILED:
+        return True
+    return r.dash_state == NOT_FOUND and any(u.request_id for u in uploads)
 
 
 def parse_args(argv):
@@ -100,22 +110,54 @@ def main(argv=None):
                 except PortalError as e:
                     log(f"Warning: {e} Rows will be matched by type and order only.")
             gap = int(float(cfg.get("seconds_between_uploads", 5)) * 1000)
-            for n, item in enumerate(items, start=1):
-                log(f"[{n}/{len(items)}] Uploading {item.label} ({item.rows} rows)...")
-                r = portal.upload(item, dry_run=args.dry_run)
-                results.append(r)
-                save()
-                if r.status == DRY_RUN:
-                    log("  Dry run: file chosen, Import not clicked.")
-                elif r.status == SUBMITTED:
-                    log(f"  Imported at {r.uploaded_at:%d/%m/%Y %H:%M:%S}. Portal said: {r.message}")
-                else:
-                    log(f"  {r.status.upper()}: {r.message}")
-                if n < len(items):
+            max_tries = max(1, int(cfg.get("upload_attempts", 3)))
+            retry_gap = int(float(cfg.get("seconds_between_attempts", 15)) * 1000)
+            uploads = []   # every try, in order, for matching the dashboard rows
+
+            def upload_file(idx, first_try):
+                item = items[idx]
+                for attempt in range(first_try, max_tries + 1):
+                    tries = f", try {attempt} of {max_tries}" if attempt > 1 else ""
+                    log(f"[{idx + 1}/{len(items)}] Uploading {item.label} ({item.rows} rows{tries})...")
+                    r = portal.upload(item, dry_run=args.dry_run)
+                    r.attempt = attempt
+                    uploads.append(r)
+                    if idx < len(results):
+                        results[idx] = r
+                    else:
+                        results.append(r)
+                    save()
+                    if r.status == DRY_RUN:
+                        log("  Dry run: file chosen, Import not clicked.")
+                        return
+                    if r.status == SUBMITTED:
+                        log(f"  Imported at {r.uploaded_at:%d/%m/%Y %H:%M:%S}. Portal said: {r.message}")
+                        return
+                    if attempt < max_tries:
+                        log(f"  {r.status.upper()} (try {attempt} of {max_tries}): {r.message}. "
+                            f"Uploading it again in {retry_gap // 1000} s.")
+                        page.wait_for_timeout(retry_gap)
+                    else:
+                        log(f"  {r.status.upper()} after {max_tries} tries: {r.message}")
+
+            for n in range(len(items)):
+                upload_file(n, 1)
+                if n < len(items) - 1:
                     page.wait_for_timeout(gap)
             if not args.dry_run:
                 try:
-                    portal.verify(results, known_ids)
+                    while True:
+                        portal.verify(uploads, known_ids)
+                        again = [i for i, r in enumerate(results) if needs_another_try(r, uploads, max_tries)]
+                        if not again:
+                            break
+                        for i in again:
+                            r = results[i]
+                            why = ("FAILED on the Import Request Dashboard" if r.dash_state == DASH_FAILED
+                                   else "not found on the Import Request Dashboard")
+                            log(f"{items[i].label} {why}; uploading it again (try {r.attempt + 1} of {max_tries}).")
+                            upload_file(i, r.attempt + 1)
+                            page.wait_for_timeout(gap)
                 except PortalError as e:
                     log(f"Could not check the Import Request Dashboard: {e}")
 

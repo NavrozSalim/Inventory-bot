@@ -6,7 +6,7 @@ import pytest
 import run_inventory
 from core.files import INVENTORY
 from core.ipcheck import IpCheckError
-from core.report import COMPLETED, DRY_RUN, SUBMITTED
+from core.report import COMPLETED, DASH_FAILED, DRY_RUN, FAILED, NOT_FOUND, SUBMITTED
 
 from .helpers import vendor_zip
 
@@ -32,10 +32,13 @@ class FakeSession:
 
 class FakePortal:
     instances = []
+    fails = {}          # (vendor, kind) -> how many tries fail before one works
+    dash_states = []    # one list of states per verify call, for the uploads in order; default all COMPLETED
 
     def __init__(self, page, cfg, log, shots_dir, on_change=None):
         self.uploads = []
         self.verified = False
+        self.verify_calls = 0
         FakePortal.instances.append(self)
 
     def sign_in(self):
@@ -49,18 +52,27 @@ class FakePortal:
 
         from core.report import UploadResult
         self.uploads.append((item.vendor, item.kind, dry_run))
+        key = (item.vendor, item.kind)
+        if FakePortal.fails.get(key):
+            FakePortal.fails[key] -= 1
+            return UploadResult(item=item, status=FAILED, message="TimeoutError: page did not load")
         return UploadResult(item=item, status=DRY_RUN if dry_run else SUBMITTED, uploaded_at=datetime.now(),
                             message="ok")
 
     def verify(self, results, known_ids):
         self.verified = True
-        for r in results:
-            r.dash_state = COMPLETED
+        states = FakePortal.dash_states[self.verify_calls] if self.verify_calls < len(FakePortal.dash_states) else []
+        self.verify_calls += 1
+        for i, r in enumerate(x for x in results if x.status == SUBMITTED):
+            r.dash_state = states[i] if i < len(states) else COMPLETED
+            r.request_id = "" if r.dash_state == NOT_FOUND else f"req{i}"
 
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     FakePortal.instances.clear()
+    FakePortal.fails = {}
+    FakePortal.dash_states = []
     monkeypatch.setattr(run_inventory, "ROOT", tmp_path)
     monkeypatch.setattr(run_inventory, "BrowserSession", FakeSession)
     monkeypatch.setattr(run_inventory, "Portal", FakePortal)
@@ -138,3 +150,49 @@ def test_missing_config_stops(setup):
     tmp, _, _, calls = setup
     assert run_inventory.main(["--config", str(tmp / "nope.json")]) == 2
     assert calls == []
+
+
+def test_failed_upload_is_tried_again(setup):
+    _, cfg, z, _ = setup
+    FakePortal.fails = {("Vevor", INVENTORY): 2}
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn"]) == 0
+    portal = FakePortal.instances[0]
+    assert [k for _, k, _ in portal.uploads] == [INVENTORY, INVENTORY, INVENTORY, "price"]
+    assert portal.verify_calls == 1
+
+
+def test_gives_up_after_three_tries(setup):
+    tmp, cfg, z, _ = setup
+    out = tmp / "results.json"
+    FakePortal.fails = {("Vevor", "price"): 5}
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn",
+                               "--results-json", str(out)]) == 1
+    assert [k for _, k, _ in FakePortal.instances[0].uploads] == [INVENTORY, "price", "price", "price"]
+    data = json.loads(out.read_text(encoding="utf-8"))["results"]
+    assert [(r["kind"], r["status"], r["attempts"]) for r in data] == [(INVENTORY, SUBMITTED, 1),
+                                                                      ("price", FAILED, 3)]
+
+
+def test_failed_on_dashboard_is_uploaded_again(setup):
+    _, cfg, z, _ = setup
+    FakePortal.dash_states = [[COMPLETED, DASH_FAILED]]   # first check: the price import failed
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn"]) == 0
+    portal = FakePortal.instances[0]
+    assert [k for _, k, _ in portal.uploads] == [INVENTORY, "price", "price"]
+    assert portal.verify_calls == 2
+
+
+def test_not_found_only_retried_when_dashboard_shows_other_uploads(setup):
+    _, cfg, z, _ = setup
+    FakePortal.dash_states = [[NOT_FOUND, NOT_FOUND]]   # nothing found at all: the dashboard read may be broken
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn"]) == 1
+    assert len(FakePortal.instances[0].uploads) == 2
+
+
+def test_dashboard_failure_stops_after_three_tries(setup):
+    _, cfg, z, _ = setup
+    FakePortal.dash_states = [[COMPLETED, DASH_FAILED]] + [[COMPLETED, DASH_FAILED, DASH_FAILED, DASH_FAILED]] * 3
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn"]) == 1
+    portal = FakePortal.instances[0]
+    assert [k for _, k, _ in portal.uploads] == [INVENTORY, "price", "price", "price"]
+    assert portal.verify_calls == 3

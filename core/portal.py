@@ -235,6 +235,7 @@ class Portal:
 
     def upload(self, item, *, dry_run=False):
         result = UploadResult(item=item)
+        clicked = False
         try:
             self.open_manage_inventory()
             card = self._card(item.kind)
@@ -259,14 +260,17 @@ class Portal:
                 self.page.wait_for_timeout(250)
             result.uploaded_at = datetime.now()
             button.click()
+            clicked = True
             message = self._feedback(float(self.cfg.get("upload_feedback_seconds", 30)))
             result.message = message or "(no message shown)"
             result.status = classify_feedback(message)
             result.screenshots.append(self.screenshot(f"after-import-{item.label}"))
             self._close_dialogs()
         except Exception as e:
-            result.status = FAILED
-            result.message = f"{type(e).__name__}: {e}"[:300]
+            # After Import was clicked the request may be on the dashboard, so it is checked there instead of
+            # being uploaded again straight away.
+            result.status = SUBMITTED if clicked else FAILED
+            result.message = f"{'Import clicked, then ' if clicked else ''}{type(e).__name__}: {e}"[:300]
             result.screenshots.append(self.screenshot(f"failed-{item.label}"))
         return result
 

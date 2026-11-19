@@ -46,6 +46,7 @@ class UploadResult:
     dash_state: str = ""
     error_count: int = 0
     screenshots: list = field(default_factory=list)
+    attempt: int = 1   # which try this is (each file gets upload_attempts tries)
 
 
 def _when(r):
@@ -55,6 +56,11 @@ def _when(r):
 
 
 def result_line(r):
+    line = _result_text(r)
+    return f"{line} (try {r.attempt})" if r.attempt > 1 else line
+
+
+def _result_text(r):
     it = r.item
     what = "Inventory" if it.kind == "inventory" else "Price"
     who = f"{it.vendor}{f' (part {it.part} of {it.parts})' if it.parts > 1 else ''}"
@@ -103,7 +109,7 @@ def result_dict(r):
         "vendor": it.vendor, "kind": it.kind, "part": it.part, "parts": it.parts, "rows": it.rows,
         "uploaded_at": f"{r.uploaded_at:%d/%m/%Y %H:%M:%S}" if r.uploaded_at else "",
         "status": r.status, "message": r.message, "request_id": r.request_id, "requested_at": r.requested_at,
-        "dash_state": r.dash_state, "error_count": r.error_count,
+        "dash_state": r.dash_state, "error_count": r.error_count, "attempts": r.attempt,
     }
 
 
@@ -119,7 +125,7 @@ def write_results_json(path, results, message=""):
 
 
 CSV_COLUMNS = ["vendor", "file_type", "part", "file", "rows", "uploaded_at", "upload_status", "portal_message",
-               "request_id", "requested_at", "dashboard_status", "errors", "screenshots"]
+               "request_id", "requested_at", "dashboard_status", "errors", "tries", "screenshots"]
 
 
 def write_csv(path, results):
@@ -132,5 +138,6 @@ def write_csv(path, results):
             it = r.item
             w.writerow([it.vendor, it.kind_label, f"{it.part}/{it.parts}", it.path.name, it.rows,
                         f"{r.uploaded_at:%Y-%m-%d %H:%M:%S}" if r.uploaded_at else "", r.status, r.message,
-                        r.request_id, r.requested_at, r.dash_state, r.error_count, " ".join(r.screenshots)])
+                        r.request_id, r.requested_at, r.dash_state, r.error_count, r.attempt,
+                        " ".join(r.screenshots)])
     return path
