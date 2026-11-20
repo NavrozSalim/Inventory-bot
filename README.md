@@ -8,7 +8,8 @@ What one run does:
 
 1. Connects SoftEther VPN connection **AU-PIY** (server `103.100.38.134`) with `vpncmd`.
 2. Opens the bot's Chrome profile and checks on the NordVPN IP lookup page that the IP is `103.100.38.134`.
-   Wrong IP, no IP or no VPN: the run stops before anything is uploaded.
+   The page is checked up to 3 times, 10 s apart (`ip_check_attempts`, `seconds_between_ip_checks`).
+   Still the wrong IP, no IP or no VPN after that: the run stops before anything is uploaded.
 3. Opens the portal. On the "part of multiple organizations" page it clicks **Prettyandpractical Pty Ltd**.
    If a verification-code or password page shows, it beeps, brings Chrome to the front and waits (10 minutes)
    for you to type it in the Chrome window. The bot never types a password or a code.

@@ -19,6 +19,8 @@ DEFAULTS = {
     "expected_ip": "103.100.38.134",
     "ip_check_url": "https://nordvpn.com/ip-lookup/",
     "ip_check_timeout_seconds": 30,
+    "ip_check_attempts": 3,              # tries of the IP lookup page before the run stops
+    "seconds_between_ip_checks": 10,
     "chrome_profile": "MyDeal Seller",
     "user_data_dir": "",
     "profile_directory": "",
