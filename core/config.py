@@ -42,6 +42,8 @@ DEFAULTS = {
     "upload_feedback_seconds": 30,
     "wait_after_upload_minutes": 3,
     "dashboard_extra_wait_minutes": 15,
+    "missing_row_wait_minutes": 5,       # an upload with no dashboard row this long after the first check is uploaded again
+    "dashboard_load_failures": 10,       # dashboard page failing to load this many checks in a row ends the check
     "dashboard_refresh_seconds": 30,
     "human_wait_minutes": 10,
     "max_rows_per_file": 0,              # 0 = never split; e.g. 2000 splits bigger vendor files into parts

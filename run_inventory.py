@@ -11,6 +11,7 @@ The laptop agent (agent.py) runs this with --zip and --results-json for jobs sta
 import argparse
 import shutil
 import sys
+import traceback
 from datetime import datetime
 
 from core.attention import clear as clear_attention
@@ -146,11 +147,16 @@ def main(argv=None):
                     page.wait_for_timeout(gap)
             if not args.dry_run:
                 try:
+                    # Each round checks only its own uploads, against rows that appeared after the round
+                    # before, so a re-upload gets its own request and not the first try's.
+                    round_start, round_known = 0, set(known_ids)
                     while True:
-                        portal.verify(uploads, known_ids)
+                        portal.verify(uploads[round_start:], round_known)
                         again = [i for i, r in enumerate(results) if needs_another_try(r, uploads, max_tries)]
                         if not again:
                             break
+                        round_known |= set(getattr(portal, "seen_ids", set()))
+                        round_start = len(uploads)
                         for i in again:
                             r = results[i]
                             why = ("FAILED on the Import Request Dashboard" if r.dash_state == DASH_FAILED
@@ -158,8 +164,8 @@ def main(argv=None):
                             log(f"{items[i].label} {why}; uploading it again (try {r.attempt + 1} of {max_tries}).")
                             upload_file(i, r.attempt + 1)
                             page.wait_for_timeout(gap)
-                except PortalError as e:
-                    log(f"Could not check the Import Request Dashboard: {e}")
+                except Exception as e:   # a lost connection must not lose the results so far
+                    log(f"Could not check the Import Request Dashboard: {type(e).__name__}: {e}")
 
         log("--- Results ---")
         for r in results:
@@ -176,6 +182,16 @@ def main(argv=None):
                 log(result_line(r))
             write_csv(ROOT / "logs" / f"inventory-run-{stamp}.csv", results)
         save(f"STOPPED: {e}")
+        return 2
+    except Exception as e:   # unexpected (e.g. the browser connection closed): stop cleanly, keep results
+        msg = f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}"
+        log(f"STOPPED (unexpected error): {msg}")
+        log(traceback.format_exc())
+        if results:
+            for r in results:
+                log(result_line(r))
+            write_csv(ROOT / "logs" / f"inventory-run-{stamp}.csv", results)
+        save(f"STOPPED: {msg}")
         return 2
     except KeyboardInterrupt:
         log("Stopped by the user (Ctrl+C).")

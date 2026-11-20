@@ -16,7 +16,7 @@ from .attention import clear as clear_attention
 from .config import PORTAL_HOST, is_set
 from .dashboard import match_results, new_rows, parse_row
 from .files import INVENTORY
-from .report import DASH_FAILED, DRY_RUN, ERRORS, FAILED, REJECTED, SUBMITTED, UploadResult
+from .report import DASH_FAILED, DRY_RUN, ERRORS, FAILED, NOT_FOUND, REJECTED, SUBMITTED, UploadResult
 
 FEEDBACK_SELECTOR = ("[role=alert], [role=status], .MuiSnackbar-root, .MuiAlert-message, "
                      "[class*='toast' i], [class*='snackbar' i], [class*='notification' i], [role=dialog]")
@@ -69,6 +69,7 @@ class Portal:
         self.clock = clock
         self.manage_url = ""
         self.dashboard_url = ""
+        self.seen_ids = set()   # every request ID read on the dashboard so far
         self._shot_n = 0
 
     # ---------- helpers ----------
@@ -211,13 +212,19 @@ class Portal:
             raise PortalError(f"The '{text}' box (with a file chooser) was not found on Manage Inventory.")
         return cards.nth(n - 1)   # innermost box that holds both the title and the file chooser
 
-    def _feedback(self, seconds):
+    def _feedback_texts(self):
+        try:
+            return [t.strip() for t in self.page.locator(FEEDBACK_SELECTOR).all_inner_texts() if t.strip()]
+        except Exception:
+            return []
+
+    def _feedback(self, seconds, already_shown=()):
+        """The portal's message after Import. Notices already on the page before the click (such as the
+        "We've simplified your CSV template" banner) are not the answer to this upload."""
+        old = set(already_shown)
         end = self.clock() + seconds
         while self.clock() < end:
-            try:
-                texts = [t.strip() for t in self.page.locator(FEEDBACK_SELECTOR).all_inner_texts() if t.strip()]
-            except Exception:
-                texts = []
+            texts = [t for t in self._feedback_texts() if t not in old]
             if texts:
                 return " | ".join(dict.fromkeys(texts))[:300]
             self.page.wait_for_timeout(500)
@@ -258,10 +265,11 @@ class Portal:
                 if button.is_enabled():
                     break
                 self.page.wait_for_timeout(250)
+            shown_before = self._feedback_texts()
             result.uploaded_at = datetime.now()
             button.click()
             clicked = True
-            message = self._feedback(float(self.cfg.get("upload_feedback_seconds", 30)))
+            message = self._feedback(float(self.cfg.get("upload_feedback_seconds", 30)), shown_before)
             result.message = message or "(no message shown)"
             result.status = classify_feedback(message)
             result.screenshots.append(self.screenshot(f"after-import-{item.label}"))
@@ -360,30 +368,69 @@ class Portal:
                 self.log(f"{label}: {left / 60:.1f} minute(s) left")
             self.page.wait_for_timeout(int(min(60, max(1, left)) * 1000))
 
+    def _read_dashboard(self, known_ids):
+        """All rows on the dashboard, or None when it did not load (connection closed, empty page)."""
+        try:
+            self.open_dashboard()
+            rows = self.read_rows(known_ids)
+        except Exception as e:   # e.g. net::ERR_CONNECTION_CLOSED: try again on the next check
+            self.log(f"Dashboard did not load: {type(e).__name__}: {str(e).splitlines()[0][:160]}")
+            return None
+        if not rows and (known_ids or self.seen_ids):
+            self.log("Dashboard showed no rows (still loading); not counted.")
+            return None
+        self.seen_ids.update(r.request_id for r in rows)
+        return rows
+
     def verify(self, results, known_ids):
-        """Wait, then check every submitted upload on the dashboard until done or time is up."""
+        """Wait, then check every submitted upload on the dashboard until done or time is up.
+
+        An upload whose row has still not shown up missing_row_wait_minutes after the first check, while
+        other uploads of the same check are on the dashboard, is counted as not found, so it can be
+        uploaded again without waiting out the whole dashboard_extra_wait_minutes.
+        """
         submitted = [r for r in results if r.status == SUBMITTED]
         if not submitted:
             return
         self._wait(float(self.cfg.get("wait_after_upload_minutes", 3)) * 60,
                    "Waiting before checking the Import Request Dashboard")
-        deadline = self.clock() + float(self.cfg.get("dashboard_extra_wait_minutes", 15)) * 60
+        start = self.clock()
+        deadline = start + float(self.cfg.get("dashboard_extra_wait_minutes", 15)) * 60
+        missing_wait = float(self.cfg.get("missing_row_wait_minutes", 5)) * 60
         refresh = float(self.cfg.get("dashboard_refresh_seconds", 30))
+        max_load_failures = int(self.cfg.get("dashboard_load_failures", 10))
         times = [r.uploaded_at.timestamp() for r in submitted if r.uploaded_at]
         since = min(times) if times else None
+        load_failures = 0
         while True:
-            self.open_dashboard()
-            all_rows = self.read_rows(known_ids)
+            all_rows = self._read_dashboard(known_ids)
+            if all_rows is None:
+                load_failures += 1
+                if load_failures >= max_load_failures:
+                    raise PortalError(f"The Import Request Dashboard did not load {load_failures} times in a row.")
+                if self.clock() > deadline:
+                    self.log("Stopped waiting: the dashboard did not load.")
+                    break
+                self.page.wait_for_timeout(int(refresh * 1000))
+                continue
+            load_failures = 0
             rows = new_rows(all_rows, known_ids, since)
             top = all_rows[0] if all_rows else None
             self.log(f"Dashboard: {len(all_rows)} row(s) read, {len(rows)} new"
                      + (f"; newest {top.request_id} {top.description} {top.requested_at} {top.status}"
                         if top else ""))
-            still_open = match_results(results, rows)
+            still_open = match_results(submitted, rows)
+            missing = [r for r in submitted if r.dash_state == NOT_FOUND]
+            if missing and any(r.request_id for r in submitted) and self.clock() - start >= missing_wait:
+                still_open -= len(missing)
+                for r in missing:
+                    self.log(f"{r.item.label}: no request on the dashboard {missing_wait / 60:.0f} minute(s) "
+                             "after the first check; the portal did not take this upload.")
             self.on_change()
             done = len(submitted) - still_open
             if not still_open:
-                self.log(f"All {len(submitted)} import request(s) finished on the dashboard.")
+                self.log(f"Dashboard check done: {len(submitted) - len(missing)} of {len(submitted)} "
+                         "import request(s) found and finished.")
                 break
             if self.clock() > deadline:
                 self.log(f"Stopped waiting: {done} of {len(submitted)} import request(s) finished.")

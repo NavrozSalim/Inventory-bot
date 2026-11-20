@@ -58,6 +58,7 @@ Settings in `config.json` (all optional except what you want to change):
 | `max_rows_per_file` | Split a bigger vendor file into parts of this many rows (0 = never). |
 | `upload_attempts` | Tries per file (3). A file is uploaded again when the portal refuses it or the page fails, and when the Import Request Dashboard shows it FAILED or it never shows up there. |
 | `seconds_between_attempts` | Wait before uploading a file again (15). |
+| `missing_row_wait_minutes` | When other uploads are on the dashboard but one never shows up, give up on it after this many minutes and upload it again (5). |
 
 ## Running from the web app (recommended)
 

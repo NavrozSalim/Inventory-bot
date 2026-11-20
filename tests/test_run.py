@@ -191,8 +191,49 @@ def test_not_found_only_retried_when_dashboard_shows_other_uploads(setup):
 
 def test_dashboard_failure_stops_after_three_tries(setup):
     _, cfg, z, _ = setup
-    FakePortal.dash_states = [[COMPLETED, DASH_FAILED]] + [[COMPLETED, DASH_FAILED, DASH_FAILED, DASH_FAILED]] * 3
+    # each retry round is checked on its own: first both files, then the price re-uploads one at a time
+    FakePortal.dash_states = [[COMPLETED, DASH_FAILED], [DASH_FAILED], [DASH_FAILED]]
     assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn"]) == 1
     portal = FakePortal.instances[0]
     assert [k for _, k, _ in portal.uploads] == [INVENTORY, "price", "price", "price"]
     assert portal.verify_calls == 3
+
+
+def test_retry_round_checks_only_its_own_upload(setup):
+    _, cfg, z, _ = setup
+    seen = []
+    FakePortal.dash_states = [[NOT_FOUND, COMPLETED]]   # the Stock/Status import never showed up
+    orig = FakePortal.verify
+
+    def verify(self, results, known_ids):
+        seen.append([(r.item.kind, r.attempt) for r in results])
+        return orig(self, results, known_ids)
+
+    FakePortal.verify = verify
+    try:
+        assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn"]) == 0
+    finally:
+        FakePortal.verify = orig
+    assert seen == [[(INVENTORY, 1), ("price", 1)], [(INVENTORY, 2)]]
+
+
+def test_unexpected_error_stops_cleanly(setup, monkeypatch):
+    tmp, cfg, z, _ = setup
+    out = tmp / "results.json"
+
+    def boom(self, results, known_ids):
+        raise RuntimeError("Page.goto: net::ERR_CONNECTION_CLOSED")
+
+    monkeypatch.setattr(FakePortal, "verify", boom)
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn",
+                               "--results-json", str(out)]) == 1   # dashboard error: results kept
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert len(data["results"]) == 2
+
+    def boom_sign_in(self):
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    monkeypatch.setattr(FakePortal, "sign_in", boom_sign_in)
+    assert run_inventory.main(["--config", str(cfg), "--zip", str(z), "--skip-vpn",
+                               "--results-json", str(out)]) == 2
+    assert json.loads(out.read_text(encoding="utf-8"))["message"].startswith("STOPPED: RuntimeError")
